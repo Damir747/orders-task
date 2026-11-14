@@ -1,5 +1,7 @@
 import type { Db } from "../db.js";
 
+export type OrderApplyResult = "created" | "updated" | "stale";
+
 export interface Order {
   id: string;
   customerId: string;
@@ -36,25 +38,77 @@ const fromRow = (r: Row): Order => ({
 export class OrdersRepository {
   constructor(private readonly db: Db) {}
 
-  async get(id: string): Promise<Order | null> {
-    const { rows } = await this.db.query<Row>(`SELECT * FROM orders WHERE id = $1`, [id]);
-    return rows[0] ? fromRow(rows[0]) : null;
-  }
+  async applyVersion(o: Order): Promise<OrderApplyResult> {
+    const client = await this.db.connect();
+    let transactionStarted = false;
+    let releaseError: Error | undefined;
 
-  async save(o: Order): Promise<void> {
-    await this.db.query(
-      `INSERT INTO orders (id, customer_id, amount_kop, amount_paid_kop, discount_percent, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO UPDATE SET
-         customer_id = excluded.customer_id,
-         amount_kop  = excluded.amount_kop,
-         amount_paid_kop = excluded.amount_paid_kop,
-         discount_percent = excluded.discount_percent,
-         status      = excluded.status,
-         created_at  = excluded.created_at,
-         updated_at  = excluded.updated_at`,
-      [o.id, o.customerId, o.amountKop, o.amountPaidKop, o.discountPercent, o.status, o.createdAt, o.updatedAt],
-    );
+    try {
+      await client.query("BEGIN");
+      transactionStarted = true;
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [o.id]);
+
+      const { rows } = await client.query<{ updated_at: Date }>(
+        `SELECT updated_at FROM orders WHERE id = $1 FOR UPDATE`,
+        [o.id],
+      );
+      const current = rows[0];
+      if (current && current.updated_at.getTime() >= o.updatedAt.getTime()) {
+        await client.query("COMMIT");
+        transactionStarted = false;
+        return "stale";
+      }
+
+      const values = [
+        o.id,
+        o.customerId,
+        o.amountKop,
+        o.amountPaidKop,
+        o.discountPercent,
+        o.status,
+        o.createdAt,
+        o.updatedAt,
+      ];
+      if (current) {
+        await client.query(
+          `UPDATE orders SET
+             customer_id = $2,
+             amount_kop = $3,
+             amount_paid_kop = $4,
+             discount_percent = $5,
+             status = $6,
+             created_at = $7,
+             updated_at = $8
+           WHERE id = $1`,
+          values,
+        );
+        await client.query("COMMIT");
+        transactionStarted = false;
+        return "updated";
+      }
+
+      await client.query(
+        `INSERT INTO orders (id, customer_id, amount_kop, amount_paid_kop, discount_percent, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        values,
+      );
+      await client.query("COMMIT");
+      transactionStarted = false;
+      return "created";
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+          transactionStarted = false;
+        } catch (rollbackError) {
+          releaseError = rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError));
+          throw new AggregateError([error, rollbackError], "Order transaction failed and rollback failed");
+        }
+      }
+      throw error;
+    } finally {
+      client.release(releaseError);
+    }
   }
 
   /** Оплаченные заказы клиента, созданные в [from, to). */

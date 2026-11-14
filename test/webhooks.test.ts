@@ -24,6 +24,24 @@ describe("POST /webhooks/order", () => {
     expect((await postWebhook(ctx.app, o)).json()).toEqual({ result: "stale" });
   });
 
+  it("равный updatedAt с отличающимися данными считается stale", async () => {
+    const original = apiOrder({ amount: 1000, status: "pending" });
+    await postWebhook(ctx.app, original);
+
+    const res = await postWebhook(ctx.app, {
+      ...original,
+      amount: 2000,
+      amountPaid: 1800,
+      status: "paid",
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ result: "stale" });
+    const { rows } = await ctx.db.query(`SELECT amount_kop, status FROM orders WHERE id = $1`, [original.id]);
+    expect(Number(rows[0].amount_kop)).toBe(100000);
+    expect(rows[0].status).toBe("pending");
+  });
+
   it("устаревшее событие после нового игнорируется", async () => {
     const o = apiOrder({ status: "paid", updatedAt: "2026-02-10T12:00:00Z" });
     await postWebhook(ctx.app, { ...o, status: "refunded", updatedAt: "2026-02-11T12:00:00Z" });

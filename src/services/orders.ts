@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ValidationError } from "../errors.js";
-import type { Order, OrdersRepository } from "../repositories/orders.js";
+import type { Order, OrderApplyResult, OrdersRepository } from "../repositories/orders.js";
 import { toKop } from "../utils/money.js";
 import { parseUtc } from "../utils/time.js";
 
@@ -23,7 +23,7 @@ const ExternalOrder = z.object({
   updatedAt: z.string(),
 });
 
-export type ApplyResult = "created" | "updated" | "stale";
+export type ApplyResult = OrderApplyResult;
 
 export class OrdersService {
   constructor(private readonly orders: OrdersRepository) {}
@@ -55,9 +55,6 @@ export class OrdersService {
    */
   async apply(raw: unknown): Promise<ApplyResult> {
     const incoming = this.normalize(raw);
-    const current = await this.orders.get(incoming.id);
-    if (current && current.updatedAt.getTime() >= incoming.updatedAt.getTime()) return "stale";
-    await this.orders.save(incoming);
-    return current ? "updated" : "created";
+    return this.orders.applyVersion(incoming);
   }
 }
