@@ -52,4 +52,19 @@ describe("POST /sync", () => {
     expect(rows[0].discount_percent).toBe("7");
     expect(rows[0].created_at.toISOString()).toBe("2026-02-10T21:30:00.000Z");
   });
+
+  it("сохраняет точные копейки из исходных number и string значений", async () => {
+    const o = apiOrder({ amount: 1.15, amountPaid: "0.29" });
+    ctx.api.pages.set(null, { items: [o], nextCursor: null });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+    expect(res.json()).toMatchObject({ received: 1, applied: 1, invalid: 0 });
+
+    const { rows } = await ctx.db.query(
+      `SELECT amount_kop, amount_paid_kop FROM orders WHERE id = $1`,
+      [o.id],
+    );
+    expect(Number(rows[0].amount_kop)).toBe(115);
+    expect(Number(rows[0].amount_paid_kop)).toBe(29);
+  });
 });

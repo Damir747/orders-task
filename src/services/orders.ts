@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ValidationError } from "../errors.js";
 import type { Order, OrdersRepository } from "../repositories/orders.js";
-import { parseRub, toKop } from "../utils/money.js";
+import { toKop } from "../utils/money.js";
 import { parseUtc } from "../utils/time.js";
 
 const DiscountPercent = z
@@ -36,8 +36,8 @@ export class OrdersService {
       return {
         id: o.id,
         customerId: o.customerId,
-        amountKop: toKop(parseRub(o.amount)),
-        amountPaidKop: toKop(parseRub(o.amountPaid)),
+        amountKop: toKop(o.amount),
+        amountPaidKop: toKop(o.amountPaid),
         discountPercent: o.discountPercent,
         status: o.status,
         createdAt: parseUtc(o.createdAt),
