@@ -1,5 +1,5 @@
 import type { OrdersApi } from "../clients/orders-api.js";
-import { ValidationError } from "../errors.js";
+import { UpstreamError, ValidationError } from "../errors.js";
 import type { SyncRunsRepository } from "../repositories/sync-runs.js";
 import type { OrdersService } from "./orders.js";
 
@@ -12,6 +12,7 @@ export interface SyncStats {
 }
 
 const PAGE_SIZE = 100;
+const MAX_PAGES = 1_000;
 
 export class SyncService {
   private running: Promise<SyncStats> | null = null;
@@ -32,11 +33,23 @@ export class SyncService {
 
   private async doRun(): Promise<SyncStats> {
     const runId = await this.runs.start();
-    const stats: SyncStats = { pages: 0, received: 0, applied: 0, stale: 0, invalid: 0 };
+    const stats: SyncStats = {
+      pages: 0,
+      received: 0,
+      applied: 0,
+      stale: 0,
+      invalid: 0,
+    };
     try {
       const seen = new Set<string>();
       let cursor: string | null = null;
       for (;;) {
+        if (stats.pages >= MAX_PAGES) {
+          throw new UpstreamError(
+            `orders pagination exceeded the ${MAX_PAGES}-page limit`,
+          );
+        }
+        const requestedCursor: string | null = cursor;
         const page = await this.api.getOrdersPage(cursor, PAGE_SIZE);
         stats.pages++;
         stats.received += page.items.length;
@@ -50,8 +63,15 @@ export class SyncService {
             stats.invalid++;
           }
         }
-        // API в конце отдаёт не nextCursor: null, а пустую страницу с тем же курсором
-        if (!page.nextCursor || page.items.length === 0 || seen.has(page.nextCursor)) break;
+        if (page.nextCursor === null) break;
+        // API может завершать проход пустой страницей с тем же запрошенным курсором.
+        if (page.items.length === 0 && page.nextCursor === requestedCursor)
+          break;
+        if (seen.has(page.nextCursor)) {
+          throw new UpstreamError(
+            `orders pagination repeated cursor: ${page.nextCursor}`,
+          );
+        }
         seen.add(page.nextCursor);
         cursor = page.nextCursor;
       }

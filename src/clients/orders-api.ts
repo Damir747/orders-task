@@ -34,21 +34,40 @@ export class HttpOrdersApi implements OrdersApi {
     private readonly opts: { rps?: number; maxAttempts?: number } = {},
   ) {}
 
-  async getOrdersPage(cursor: string | null, limit: number): Promise<OrdersPage> {
+  async getOrdersPage(
+    cursor: string | null,
+    limit: number,
+  ): Promise<OrdersPage> {
     const url = new URL("/orders", this.baseUrl);
     url.searchParams.set("limit", String(limit));
     if (cursor !== null) url.searchParams.set("cursor", cursor);
     const body = (await this.request(url)) as Partial<OrdersPage> | null;
-    if (!body || !Array.isArray(body.items)) {
-      throw new UpstreamError(`unexpected /orders response: ${JSON.stringify(body).slice(0, 200)}`);
+    const nextCursor = body?.nextCursor;
+
+    if (
+      !body ||
+      !Array.isArray(body.items) ||
+      nextCursor === undefined ||
+      (nextCursor !== null &&
+        (typeof nextCursor !== "string" || nextCursor.length === 0))
+    ) {
+      throw new UpstreamError(
+        `unexpected /orders response: ${JSON.stringify(body).slice(0, 200)}`,
+      );
     }
-    return { items: body.items, nextCursor: typeof body.nextCursor === "string" ? body.nextCursor : null };
+
+    return { items: body.items, nextCursor };
   }
 
   async getCustomer(id: string): Promise<Customer | null> {
-    const body = (await this.request(new URL(`/customers/${encodeURIComponent(id)}`, this.baseUrl))) as Partial<Customer> | null;
+    const body = (await this.request(
+      new URL(`/customers/${encodeURIComponent(id)}`, this.baseUrl),
+    )) as Partial<Customer> | null;
     if (body === null) return null;
-    if (typeof body.timezone !== "string") throw new UpstreamError(`unexpected /customers response: ${JSON.stringify(body)}`);
+    if (typeof body.timezone !== "string")
+      throw new UpstreamError(
+        `unexpected /customers response: ${JSON.stringify(body)}`,
+      );
     return { id, timezone: body.timezone };
   }
 
@@ -76,14 +95,16 @@ export class HttpOrdersApi implements OrdersApi {
       if (res.status === 404) return null;
       if (res.status === 429) {
         const retryAfter = Number(res.headers.get("retry-after"));
-        this.nextSlot = Date.now() + (retryAfter > 0 ? retryAfter * 1000 : 1000);
+        this.nextSlot =
+          Date.now() + (retryAfter > 0 ? retryAfter * 1000 : 1000);
         continue;
       }
       if (res.status >= 500) {
         await sleep(backoff);
         continue;
       }
-      if (!res.ok) throw new UpstreamError(`${url.pathname}: HTTP ${res.status}`);
+      if (!res.ok)
+        throw new UpstreamError(`${url.pathname}: HTTP ${res.status}`);
       const body = (await res.json()) as unknown;
       if (body && typeof body === "object" && "error" in body) {
         // 200 с ошибкой в теле — на практике это тот же rate limit
@@ -92,6 +113,8 @@ export class HttpOrdersApi implements OrdersApi {
       }
       return body;
     }
-    throw new UpstreamError(`${url.pathname}: no successful response after ${maxAttempts} attempts`);
+    throw new UpstreamError(
+      `${url.pathname}: no successful response after ${maxAttempts} attempts`,
+    );
   }
 }

@@ -17,6 +17,72 @@ describe("POST /sync", () => {
     expect(rows[0].n).toBe(3);
   });
 
+  it("завершает пагинацию по nextCursor null", async () => {
+    ctx.api.pages.set(null, { items: [apiOrder()], nextCursor: null });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ pages: 1, received: 1, applied: 1 });
+    expect(ctx.api.calls).toBe(1);
+  });
+
+  it("продолжает после пустой страницы с новым курсором", async () => {
+    const order = apiOrder();
+    ctx.api.pages.set(null, { items: [], nextCursor: "p2" });
+    ctx.api.pages.set("p2", { items: [order], nextCursor: null });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ pages: 2, received: 1, applied: 1 });
+    expect(ctx.api.calls).toBe(2);
+    const { rows } = await ctx.db.query(`SELECT count(*)::int AS n FROM orders WHERE id = $1`, [order.id]);
+    expect(rows[0].n).toBe(1);
+  });
+
+  it("ошибкой завершает синхронизацию при повторном курсоре на непустой странице", async () => {
+    const order = apiOrder();
+    ctx.api.pages.set(null, { items: [], nextCursor: "p2" });
+    ctx.api.pages.set("p2", { items: [order], nextCursor: "p2" });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "upstream_error" });
+    const { rows } = await ctx.db.query(`SELECT error FROM sync_runs ORDER BY id DESC LIMIT 1`);
+    expect(rows[0].error).toContain("repeated cursor");
+  });
+
+  it("ошибкой завершает синхронизацию при цикле из нескольких курсоров", async () => {
+    ctx.api.pages.set(null, { items: [], nextCursor: "p2" });
+    ctx.api.pages.set("p2", { items: [], nextCursor: "p3" });
+    ctx.api.pages.set("p3", { items: [apiOrder()], nextCursor: "p2" });
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "upstream_error" });
+    const { rows } = await ctx.db.query(`SELECT error FROM sync_runs ORDER BY id DESC LIMIT 1`);
+    expect(rows[0].error).toContain("repeated cursor");
+  });
+
+  it("ошибкой завершает синхронизацию при достижении предела страниц", async () => {
+    const maxPages = 1_000;
+    for (let page = 0; page < maxPages; page++) {
+      ctx.api.pages.set(page === 0 ? null : `p${page}`, { items: [], nextCursor: `p${page + 1}` });
+    }
+
+    const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "upstream_error" });
+    expect(ctx.api.calls).toBe(maxPages);
+    const { rows } = await ctx.db.query(`SELECT pages, error FROM sync_runs ORDER BY id DESC LIMIT 1`);
+    expect(rows[0].pages).toBe(maxPages);
+    expect(rows[0].error).toContain("page limit");
+  });
+
   it("невалидные заказы пропускает, а не падает", async () => {
     ctx.api.pages.set(null, { items: [apiOrder(), { id: "broken" }, apiOrder({ amount: "abc" })], nextCursor: null });
     const res = await ctx.app.inject({ method: "POST", url: "/sync" });
