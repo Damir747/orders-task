@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { apiOrder, dailyTotals, postWebhook, setupTestApp } from "./helpers.js";
 
 const ctx = setupTestApp();
@@ -57,6 +57,87 @@ describe("GET /customers/:id/daily-totals", () => {
     expect(res.json()).toEqual([
       { date: "2026-02-10", total: 800, gross: 800, discount: 0, net: 800 },
     ]);
+  });
+
+  it("группирует Berlin по календарным дням до и после перехода на летнее время", async () => {
+    ctx.api.customers.set("c_berlin", "Europe/Berlin");
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 100, createdAt: "2026-03-28T22:30:00Z" }),
+    );
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 200, createdAt: "2026-03-29T22:30:00Z" }),
+    );
+
+    const res = await dailyTotals(ctx.app, "c_berlin", "2026-03-28", "2026-03-30");
+    expect(res.json()).toEqual([
+      { date: "2026-03-28", total: 100, gross: 100, discount: 0, net: 100 },
+      { date: "2026-03-29", total: 0, gross: 0, discount: 0, net: 0 },
+      { date: "2026-03-30", total: 200, gross: 200, discount: 0, net: 200 },
+    ]);
+  });
+
+  it("относит заказ около UTC-полуночи к следующему дню Berlin", async () => {
+    ctx.api.customers.set("c_berlin", "Europe/Berlin");
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 300, createdAt: "2026-02-10T23:30:00Z" }),
+    );
+
+    const res = await dailyTotals(ctx.app, "c_berlin", "2026-02-10", "2026-02-11");
+    expect(res.json()).toEqual([
+      { date: "2026-02-10", total: 0, gross: 0, discount: 0, net: 0 },
+      { date: "2026-02-11", total: 300, gross: 300, discount: 0, net: 300 },
+    ]);
+  });
+
+  it("включает локальные даты from и to и исключает соседние даты", async () => {
+    ctx.api.customers.set("c_berlin", "Europe/Berlin");
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 50, createdAt: "2026-03-26T22:59:59Z" }),
+    );
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 100, createdAt: "2026-03-26T23:00:00Z" }),
+    );
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 200, createdAt: "2026-03-31T21:59:59Z" }),
+    );
+    await postWebhook(
+      ctx.app,
+      apiOrder({ customerId: "c_berlin", amount: 400, createdAt: "2026-03-31T22:00:00Z" }),
+    );
+
+    const res = await dailyTotals(ctx.app, "c_berlin", "2026-03-27", "2026-03-31");
+    expect(res.json()).toEqual([
+      { date: "2026-03-27", total: 100, gross: 100, discount: 0, net: 100 },
+      { date: "2026-03-28", total: 0, gross: 0, discount: 0, net: 0 },
+      { date: "2026-03-29", total: 0, gross: 0, discount: 0, net: 0 },
+      { date: "2026-03-30", total: 0, gross: 0, discount: 0, net: 0 },
+      { date: "2026-03-31", total: 200, gross: 200, discount: 0, net: 200 },
+    ]);
+  });
+
+  it("считает историческую дату независимо от текущего летнего смещения", async () => {
+    ctx.api.customers.set("c_1", "Europe/Berlin");
+    await postWebhook(
+      ctx.app,
+      apiOrder({ amount: 500, createdAt: "2026-02-10T22:30:00Z" }),
+    );
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-01T12:00:00Z"));
+    try {
+      const res = await dailyTotals(ctx.app, "c_1", "2026-02-10", "2026-02-10");
+      expect(res.json()).toEqual([
+        { date: "2026-02-10", total: 500, gross: 500, discount: 0, net: 500 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("таймзона клиента берётся из API один раз", async () => {
