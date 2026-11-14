@@ -35,7 +35,7 @@ let seq = 0;
 /** Заказ в формате внешнего API. */
 export function apiOrder(over: Partial<Record<string, unknown>> = {}) {
   seq++;
-  return {
+  const order: Record<string, unknown> = {
     id: `o_${seq}`,
     customerId: "c_1",
     amount: 1000,
@@ -43,6 +43,16 @@ export function apiOrder(over: Partial<Record<string, unknown>> = {}) {
     createdAt: "2026-02-10T12:00:00.000Z",
     updatedAt: "2026-02-10T12:00:00.000Z",
     ...over,
+  };
+  return {
+    id: String(order.id),
+    customerId: String(order.customerId),
+    amount: order.amount,
+    status: order.status,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+    discountPercent: order.discountPercent ?? 0,
+    amountPaid: order.amountPaid ?? order.amount,
   };
 }
 

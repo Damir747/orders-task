@@ -35,11 +35,21 @@ describe("POST /sync", () => {
   });
 
   it("строковые суммы и даты без зоны", async () => {
-    const o = apiOrder({ amount: "2500.00", createdAt: "2026-02-10T21:30:00" });
+    const o = apiOrder({
+      amount: "2500.00",
+      discountPercent: "7",
+      amountPaid: "2325.00",
+      createdAt: "2026-02-10T21:30:00",
+    });
     ctx.api.pages.set(null, { items: [o], nextCursor: null });
     await ctx.app.inject({ method: "POST", url: "/sync" });
-    const { rows } = await ctx.db.query(`SELECT amount_kop, created_at FROM orders WHERE id = $1`, [o.id]);
+    const { rows } = await ctx.db.query(
+      `SELECT amount_kop, amount_paid_kop, discount_percent, created_at FROM orders WHERE id = $1`,
+      [o.id],
+    );
     expect(Number(rows[0].amount_kop)).toBe(250000);
+    expect(Number(rows[0].amount_paid_kop)).toBe(232500);
+    expect(rows[0].discount_percent).toBe("7");
     expect(rows[0].created_at.toISOString()).toBe("2026-02-10T21:30:00.000Z");
   });
 });

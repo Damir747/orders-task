@@ -5,9 +5,17 @@ const ctx = setupTestApp();
 
 describe("POST /webhooks/order", () => {
   it("создаёт заказ", async () => {
-    const res = await postWebhook(ctx.app, apiOrder());
+    const o = apiOrder({ amount: 1000, discountPercent: 10, amountPaid: 900 });
+    const res = await postWebhook(ctx.app, o);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ result: "created" });
+    const { rows } = await ctx.db.query(
+      `SELECT amount_kop, amount_paid_kop, discount_percent FROM orders WHERE id = $1`,
+      [o.id],
+    );
+    expect(Number(rows[0].amount_kop)).toBe(100000);
+    expect(Number(rows[0].amount_paid_kop)).toBe(90000);
+    expect(rows[0].discount_percent).toBe("10");
   });
 
   it("повтор того же события ничего не меняет", async () => {

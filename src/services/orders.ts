@@ -4,11 +4,20 @@ import type { Order, OrdersRepository } from "../repositories/orders.js";
 import { parseRub, toKop } from "../utils/money.js";
 import { parseUtc } from "../utils/time.js";
 
+const DiscountPercent = z
+  .union([
+    z.number().finite().min(0).max(100),
+    z.string().regex(/^(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?)$/),
+  ])
+  .transform(String);
+
 /** Заказ в формате внешнего API (поля, которые нам нужны; остальные игнорируем). */
 const ExternalOrder = z.object({
   id: z.string().min(1),
   customerId: z.string().min(1),
   amount: z.union([z.number(), z.string()]),
+  discountPercent: DiscountPercent,
+  amountPaid: z.union([z.number(), z.string()]),
   status: z.enum(["pending", "paid", "refunded"]),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -28,6 +37,8 @@ export class OrdersService {
         id: o.id,
         customerId: o.customerId,
         amountKop: toKop(parseRub(o.amount)),
+        amountPaidKop: toKop(parseRub(o.amountPaid)),
+        discountPercent: o.discountPercent,
         status: o.status,
         createdAt: parseUtc(o.createdAt),
         updatedAt: parseUtc(o.updatedAt),
