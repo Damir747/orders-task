@@ -105,7 +105,17 @@ export class HttpOrdersApi implements OrdersApi {
       }
       if (!res.ok)
         throw new UpstreamError(`${url.pathname}: HTTP ${res.status}`);
-      const body = (await res.json()) as unknown;
+      let body: unknown;
+      try {
+        body = (await res.json()) as unknown;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) {
+          await sleep(backoff);
+          continue;
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new UpstreamError(`${url.pathname}: invalid JSON response (${detail})`);
+      }
       if (body && typeof body === "object" && "error" in body) {
         // 200 с ошибкой в теле — на практике это тот же rate limit
         this.nextSlot = Date.now() + 1000;

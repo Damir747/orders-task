@@ -49,7 +49,8 @@ describe("POST /sync", () => {
     const res = await ctx.app.inject({ method: "POST", url: "/sync" });
 
     expect(res.statusCode).toBe(502);
-    expect(res.json()).toMatchObject({ error: "upstream_error" });
+    expect(res.json()).toMatchObject({ error: "upstream_error", message: "Upstream service error" });
+    expect(res.json().message).not.toContain("p2");
     const { rows } = await ctx.db.query(`SELECT error FROM sync_runs ORDER BY id DESC LIMIT 1`);
     expect(rows[0].error).toContain("repeated cursor");
   });

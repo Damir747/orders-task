@@ -61,4 +61,71 @@ describe("POST /webhooks/order", () => {
     const res = await postWebhook(ctx.app, { id: "x" });
     expect(res.statusCode).toBe(400);
   });
+
+  it("некорректный JSON — 400 с безопасным форматом ошибки", async () => {
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/webhooks/order",
+      headers: { "content-type": "application/json" },
+      payload: "{",
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "bad_request", message: "Malformed JSON" });
+  });
+
+  it("превышение лимита тела — 413", async () => {
+    const payload = JSON.stringify({ data: "x".repeat(1024 * 1024) });
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/webhooks/order",
+      headers: { "content-type": "application/json" },
+      payload,
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toEqual({
+      error: "payload_too_large",
+      message: "Request body too large",
+    });
+  });
+
+  it("неподдерживаемый Content-Type — 415", async () => {
+    const res = await ctx.app.inject({
+      method: "POST",
+      url: "/webhooks/order",
+      headers: { "content-type": "application/xml" },
+      payload: "<order />",
+    });
+
+    expect(res.statusCode).toBe(415);
+    expect(res.json()).toEqual({
+      error: "unsupported_media_type",
+      message: "Unsupported Content-Type",
+    });
+  });
+
+  it("неизвестный маршрут — 404 в общем формате", async () => {
+    const res = await ctx.app.inject({ method: "GET", url: "/missing-route" });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "not_found", message: "Route not found" });
+  });
+
+  it("неожиданная ошибка — безопасный 500 без произвольного statusCode", async () => {
+    const sync = ctx.container.sync;
+    const originalRun = sync.run;
+    sync.run = async () => {
+      throw Object.assign(new Error("internal database detail"), { statusCode: 418 });
+    };
+
+    try {
+      const res = await ctx.app.inject({ method: "POST", url: "/sync" });
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json()).toEqual({ error: "internal", message: "Internal error" });
+    } finally {
+      sync.run = originalRun;
+    }
+  });
 });
